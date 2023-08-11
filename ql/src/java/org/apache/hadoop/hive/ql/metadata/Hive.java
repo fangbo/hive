@@ -79,6 +79,7 @@ import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 import javax.jdo.JDODataStoreException;
+import javax.xml.crypto.Data;
 
 import com.google.common.collect.ImmutableList;
 
@@ -121,6 +122,7 @@ import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.utils.RetryUtilities;
 import org.apache.hadoop.hive.ql.ddl.table.AlterTableType;
+import org.apache.hadoop.hive.ql.exec.*;
 import org.apache.hadoop.hive.ql.io.HdfsUtils;
 import org.apache.hadoop.hive.metastore.HiveMetaException;
 import org.apache.hadoop.hive.metastore.HiveMetaHook;
@@ -210,11 +212,6 @@ import org.apache.hadoop.hive.metastore.utils.MetaStoreServerUtils;
 import org.apache.hadoop.hive.metastore.utils.MetaStoreUtils;
 import org.apache.hadoop.hive.ql.ErrorMsg;
 import org.apache.hadoop.hive.ql.ddl.database.drop.DropDatabaseDesc;
-import org.apache.hadoop.hive.ql.exec.AbstractFileMergeOperator;
-import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
-import org.apache.hadoop.hive.ql.exec.FunctionUtils;
-import org.apache.hadoop.hive.ql.exec.SerializationUtilities;
-import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.Utilities.PartitionDetails;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.io.AcidUtils.TableSnapshot;
@@ -232,6 +229,7 @@ import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
 import org.apache.hadoop.hive.ql.plan.ExprNodeGenericFuncDesc;
 import org.apache.hadoop.hive.ql.plan.LoadTableDesc;
 import org.apache.hadoop.hive.ql.plan.LoadTableDesc.LoadFileType;
+import org.apache.hadoop.hive.ql.plan.PathOutputCommitterWork;
 import org.apache.hadoop.hive.ql.session.CreateTableAutomaticGrant;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.hive.serde2.Deserializer;
@@ -240,6 +238,8 @@ import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe;
 import org.apache.hadoop.hive.shims.HadoopShims;
 import org.apache.hadoop.hive.shims.ShimLoader;
 import org.apache.hadoop.mapred.InputFormat;
+import org.apache.hadoop.mapreduce.TaskAttemptID;
+import org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hive.common.util.HiveVersionInfo;
@@ -2576,6 +2576,20 @@ public class Hive {
                                  boolean isSrcLocal, boolean isAcidIUDoperation,
                                  boolean resetStatistics, Long writeId,
                                  int stmtId, boolean isInsertOverwrite, boolean isDirectInsert) throws HiveException {
+    return loadPartition(loadPath, tbl, partSpec, loadFileType, inheritTableSpecs,
+        inheritLocation, isSkewedStoreAsSubdir, isSrcLocal, isAcidIUDoperation,
+        resetStatistics, writeId, stmtId, isInsertOverwrite, isDirectInsert,
+        HiveDataCommitter.FALLBACK_DATA_COMMITTER);
+  }
+
+  public Partition loadPartition(Path loadPath, Table tbl, Map<String, String> partSpec,
+                                LoadFileType loadFileType, boolean inheritTableSpecs,
+                                boolean inheritLocation,
+                                boolean isSkewedStoreAsSubdir,
+                                boolean isSrcLocal, boolean isAcidIUDoperation,
+                                boolean resetStatistics, Long writeId,
+                                int stmtId, boolean isInsertOverwrite, boolean isDirectInsert,
+                                DataCommitter dataCommitter) throws HiveException {
 
     PerfLogger perfLogger = SessionState.getPerfLogger();
     perfLogger.perfLogBegin("MoveTask", PerfLogger.LOAD_PARTITION);
@@ -2595,7 +2609,8 @@ public class Hive {
     Partition newTPart = loadPartitionInternal(loadPath, tbl, partSpec, oldPart,
             loadFileType, inheritTableSpecs,
             inheritLocation, isSkewedStoreAsSubdir, isSrcLocal, isAcidIUDoperation,
-            resetStatistics, writeId, stmtId, isInsertOverwrite, isTxnTable, newFiles, isDirectInsert);
+            resetStatistics, writeId, stmtId, isInsertOverwrite, isTxnTable, newFiles, isDirectInsert,
+            dataCommitter);
 
     AcidUtils.TableSnapshot tableSnapshot = isTxnTable ? getTableSnapshot(tbl, writeId) : null;
     if (tableSnapshot != null) {
@@ -2666,7 +2681,7 @@ public class Hive {
                         boolean inheritLocation, boolean isSkewedStoreAsSubdir,
                         boolean isSrcLocal, boolean isAcidIUDoperation, boolean resetStatistics,
                         Long writeId, int stmtId, boolean isInsertOverwrite,
-                        boolean isTxnTable, List<FileStatus> newFiles, boolean isDirectInsert) throws HiveException {
+                        boolean isTxnTable, List<FileStatus> newFiles, boolean isDirectInsert, DataCommitter dataCommitter) throws HiveException {
     Path tblDataLocationPath =  tbl.getDataLocation();
     boolean isMmTableWrite = AcidUtils.isInsertOnlyTable(tbl.getParameters());
     assert tbl.getPath() != null : "null==getPath() for " + tbl.getTableName();
@@ -2757,11 +2772,11 @@ public class Hive {
           boolean isSkipTrash = MetaStoreUtils.isSkipTrash(tbl.getParameters());
           boolean needRecycle = !tbl.isTemporary()
               && ReplChangeManager.shouldEnableCm(getDatabase(tbl.getDbName()), tbl.getTTable());
-          replaceFiles(tbl.getPath(), loadPath, destPath, oldPartPath, getConf(), isSrcLocal,
-              isSkipTrash, newFiles, FileUtils.HIDDEN_FILES_PATH_FILTER, needRecycle, isManaged, isInsertOverwrite);
+          dataCommitter.replaceFiles(tbl.getPath(), loadPath, destPath, oldPartPath, getConf(), isSrcLocal,
+              isSkipTrash, newFiles, FileUtils.HIDDEN_FILES_PATH_FILTER, needRecycle, isManaged, isInsertOverwrite, this);
         } else {
           FileSystem fs = destPath.getFileSystem(conf);
-          copyFiles(conf, loadPath, destPath, fs, isSrcLocal, isAcidIUDoperation,
+          dataCommitter.copyFiles(conf, loadPath, destPath, fs, isSrcLocal, isAcidIUDoperation,
               (loadFileType == LoadFileType.OVERWRITE_EXISTING), newFiles,
               tbl.getNumBuckets() > 0, isFullAcidTable, isManaged, false);
         }
@@ -3167,6 +3182,13 @@ private void constructOneLBLocationMap(FileStatus fSta,
   public Map<Map<String, String>, Partition> loadDynamicPartitions(final LoadTableDesc tbd, final int numLB,
       final boolean isAcid, final long writeId, final int stmtId, final boolean resetStatistics,
       final AcidUtils.Operation operation, Map<Path, PartitionDetails> partitionDetailsMap) throws HiveException {
+    return loadDynamicPartitions(tbd, numLB, isAcid, writeId, stmtId, resetStatistics,
+        operation, partitionDetailsMap, HiveDataCommitter.FALLBACK_DATA_COMMITTER);
+  }
+
+  public Map<Map<String, String>, Partition> loadDynamicPartitions(final LoadTableDesc tbd, final int numLB,
+      final boolean isAcid, final long writeId, final int stmtId, final boolean resetStatistics,
+      final AcidUtils.Operation operation, Map<Path, PartitionDetails> partitionDetailsMap, DataCommitter dataCommitter) throws HiveException {
 
     PerfLogger perfLogger = SessionState.getPerfLogger();
     perfLogger.perfLogBegin("MoveTask", PerfLogger.LOAD_DYNAMIC_PARTITIONS);
@@ -3242,10 +3264,26 @@ private void constructOneLBLocationMap(FileStatus fSta,
             // Otherwise only collect them, if we are going to fire write notifications
             newFiles = Collections.synchronizedList(new ArrayList<>());
           }
+
+          DataCommitter partitionCommitter = HiveDataCommitter.FALLBACK_DATA_COMMITTER;
+          if (dataCommitter instanceof PathOutputCommitterDataCommitter) {
+            PathOutputCommitterDataCommitter originJobCommitter = (PathOutputCommitterDataCommitter) dataCommitter;
+            Configuration config = originJobCommitter.jobContext().getConfiguration();
+            config.unset("mapreduce.job.application.attempt.id");
+            TaskAttemptID taskAttemptID = new TaskAttemptID();
+            TaskAttemptContextImpl taskAttemptContext = new TaskAttemptContextImpl(conf, taskAttemptID);
+            taskAttemptContext.setJobID(originJobCommitter.jobContext().getJobID());
+            PathOutputCommitterWork work =
+                new PathOutputCommitterWork(entry.getKey().toString(), originJobCommitter.jobContext(), taskAttemptContext);
+            partitionCommitter =
+                new PathOutputCommitterDataCommitter(originJobCommitter.jobContext(), work.createPathOutputCommitter(),
+                    originJobCommitter.writeIds());
+
+          }
           // load the partition
           Partition partition = loadPartitionInternal(entry.getKey(), tbl,
                   fullPartSpec, oldPartition, tbd.getLoadFileType(), true, false, numLB > 0, false, isAcid,
-                  resetStatistics, writeId, stmtId, tbd.isInsertOverwrite(), isTxnTable, newFiles, tbd.isDirectInsert());
+                  resetStatistics, writeId, stmtId, tbd.isInsertOverwrite(), isTxnTable, newFiles, tbd.isDirectInsert(), partitionCommitter);
           // if the partition already existed before the loading, no need to add it again to the
           // metastore
           if (tableSnapshot != null) {
@@ -3370,6 +3408,11 @@ private void constructOneLBLocationMap(FileStatus fSta,
     } finally {
       LOG.debug("Cancelling " + futures.size() + " dynamic loading tasks");
       executor.shutdownNow();
+
+      if (dataCommitter instanceof PathOutputCommitterDataCommitter) {
+        PathOutputCommitterDataCommitter outputCommitterDataCommitter = (PathOutputCommitterDataCommitter) dataCommitter;
+        outputCommitterDataCommitter.cleanUpStagingFiles();
+      }
     }
     if (HiveConf.getBoolVar(conf, ConfVars.HIVE_IN_TEST) && HiveConf.getBoolVar(conf, ConfVars.HIVETESTMODEFAILLOADDYNAMICPARTITION)) {
       throw new HiveException(HiveConf.ConfVars.HIVETESTMODEFAILLOADDYNAMICPARTITION.name() + "=true");
@@ -3447,7 +3490,14 @@ private void constructOneLBLocationMap(FileStatus fSta,
   public void loadTable(Path loadPath, String tableName, LoadFileType loadFileType, boolean isSrcLocal,
       boolean isSkewedStoreAsSubdir, boolean isAcidIUDoperation, boolean resetStatistics,
       Long writeId, int stmtId, boolean isInsertOverwrite, boolean isDirectInsert) throws HiveException {
+    loadTable(loadPath, tableName, loadFileType, isSrcLocal,
+        isSkewedStoreAsSubdir, isAcidIUDoperation, resetStatistics,
+        writeId, stmtId, isInsertOverwrite, isDirectInsert, HiveDataCommitter.FALLBACK_DATA_COMMITTER);
+  }
 
+  public void loadTable(Path loadPath, String tableName, LoadFileType loadFileType, boolean isSrcLocal,
+      boolean isSkewedStoreAsSubdir, boolean isAcidIUDoperation, boolean resetStatistics,
+      Long writeId, int stmtId, boolean isInsertOverwrite, boolean isDirectInsert, DataCommitter dataCommitter) throws HiveException {
     PerfLogger perfLogger = SessionState.getPerfLogger();
     perfLogger.perfLogBegin("MoveTask", PerfLogger.LOAD_TABLE);
 
@@ -3503,12 +3553,12 @@ private void constructOneLBLocationMap(FileStatus fSta,
         boolean isSkipTrash = MetaStoreUtils.isSkipTrash(tbl.getParameters());
         boolean needRecycle = !tbl.isTemporary()
                 && ReplChangeManager.shouldEnableCm(getDatabase(tbl.getDbName()), tbl.getTTable());
-        replaceFiles(tblPath, loadPath, destPath, tblPath, conf, isSrcLocal, isSkipTrash,
-            newFiles, FileUtils.HIDDEN_FILES_PATH_FILTER, needRecycle, isManaged, isInsertOverwrite);
+        dataCommitter.replaceFiles(tblPath, loadPath, destPath, tblPath, conf, isSrcLocal, isSkipTrash,
+            newFiles, FileUtils.HIDDEN_FILES_PATH_FILTER, needRecycle, isManaged, isInsertOverwrite, this);
       } else {
         try {
           FileSystem fs = tbl.getDataLocation().getFileSystem(conf);
-          copyFiles(conf, loadPath, destPath, fs, isSrcLocal, isAcidIUDoperation,
+          dataCommitter.copyFiles(conf, loadPath, destPath, fs, isSrcLocal, isAcidIUDoperation,
               loadFileType == LoadFileType.OVERWRITE_EXISTING, newFiles,
               tbl.getNumBuckets() > 0, isFullAcidTable, isManaged, isCompactionTable);
         } catch (IOException e) {
@@ -4849,7 +4899,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
    *   Moves a file from one {@link Path} to another. If {@code isRenameAllowed} is true then the
    *   {@link FileSystem#rename(Path, Path)} method is used to move the file. If its false then the data is copied, if
    *   {@code isSrcLocal} is true then the {@link FileSystem#copyFromLocalFile(Path, Path)} method is used, else
-   *   {@link FileUtils#copy(FileSystem, Path, FileSystem, Path, boolean, boolean, HiveConf)} is used.
+   *   {@link FileUtils#copy(FileSystem, Path, FileSystem, Path, boolean, boolean, HiveConf, DataCopyStatistics)} is used.
    * </p>
    *
    * <p>
@@ -5247,7 +5297,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
    * @param isCompactionTable is table used in query-based compaction
    * @throws HiveException
    */
-  static protected void copyFiles(HiveConf conf, Path srcf, Path destf, FileSystem fs,
+  public static void copyFiles(HiveConf conf, Path srcf, Path destf, FileSystem fs,
       boolean isSrcLocal, boolean isAcidIUD, boolean isOverwrite, List<FileStatus> newFilesStatus, boolean isBucketed,
       boolean isFullAcidTable, boolean isManaged, boolean isCompactionTable) throws HiveException {
     try {
@@ -5516,7 +5566,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
    * @param isManaged
    *          If the table is managed.
    */
-  private void replaceFiles(Path tablePath, Path srcf, Path destf, Path oldPath, HiveConf conf,
+  public void replaceFiles(Path tablePath, Path srcf, Path destf, Path oldPath, HiveConf conf,
           boolean isSrcLocal, boolean purge, List<FileStatus> newFiles, PathFilter deletePathFilter,
       boolean isNeedRecycle, boolean isManaged, boolean isInsertOverwrite) throws HiveException {
     try {
@@ -5620,7 +5670,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
     }
   }
 
-  private void deleteOldPathForReplace(Path destPath, Path oldPath, HiveConf conf, boolean purge,
+  public void deleteOldPathForReplace(Path destPath, Path oldPath, HiveConf conf, boolean purge,
       PathFilter pathFilter, boolean isNeedRecycle) throws HiveException {
     Utilities.FILE_OP_LOGGER.debug("Deleting old paths for replace in " + destPath
         + " and old path " + oldPath);

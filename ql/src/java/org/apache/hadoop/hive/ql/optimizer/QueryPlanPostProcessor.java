@@ -27,23 +27,7 @@ import org.apache.hadoop.hive.ql.exec.repl.ReplLoadWork;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.parse.GenTezProcContext;
 import org.apache.hadoop.hive.ql.parse.GenTezWork;
-import org.apache.hadoop.hive.ql.plan.ArchiveWork;
-import org.apache.hadoop.hive.ql.plan.BaseWork;
-import org.apache.hadoop.hive.ql.plan.BasicStatsNoJobWork;
-import org.apache.hadoop.hive.ql.plan.BasicStatsWork;
-import org.apache.hadoop.hive.ql.plan.ColumnStatsUpdateWork;
-import org.apache.hadoop.hive.ql.plan.ConditionalWork;
-import org.apache.hadoop.hive.ql.plan.CopyWork;
-import org.apache.hadoop.hive.ql.plan.DependencyCollectionWork;
-import org.apache.hadoop.hive.ql.plan.ExplainSQRewriteWork;
-import org.apache.hadoop.hive.ql.plan.ExplainWork;
-import org.apache.hadoop.hive.ql.plan.FetchWork;
-import org.apache.hadoop.hive.ql.plan.FileSinkDesc;
-import org.apache.hadoop.hive.ql.plan.MapredLocalWork;
-import org.apache.hadoop.hive.ql.plan.MapredWork;
-import org.apache.hadoop.hive.ql.plan.MoveWork;
-import org.apache.hadoop.hive.ql.plan.StatsWork;
-import org.apache.hadoop.hive.ql.plan.TezWork;
+import org.apache.hadoop.hive.ql.plan.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -105,7 +89,8 @@ public class QueryPlanPostProcessor {
           work instanceof FetchWork ||
           work instanceof MoveWork ||
           work instanceof BasicStatsNoJobWork ||
-          work instanceof StatsWork) {
+          work instanceof StatsWork ||
+          work instanceof PathOutputCommitterWork) {
         LOG.debug("Found " + work.getClass().getName() + " - no FileSinkOperation can be present.  executionId=" + executionId);
       }
       else {

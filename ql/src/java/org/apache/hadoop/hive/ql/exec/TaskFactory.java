@@ -51,21 +51,7 @@ import org.apache.hadoop.hive.ql.exec.schq.ScheduledQueryMaintenanceTask;
 import org.apache.hadoop.hive.ql.exec.tez.TezTask;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileTask;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileWork;
-import org.apache.hadoop.hive.ql.plan.ColumnStatsUpdateWork;
-import org.apache.hadoop.hive.ql.plan.ConditionalWork;
-import org.apache.hadoop.hive.ql.plan.CopyWork;
-import org.apache.hadoop.hive.ql.plan.DependencyCollectionWork;
-import org.apache.hadoop.hive.ql.plan.ExplainSQRewriteWork;
-import org.apache.hadoop.hive.ql.plan.ExplainWork;
-import org.apache.hadoop.hive.ql.plan.ExportWork;
-import org.apache.hadoop.hive.ql.plan.FetchWork;
-import org.apache.hadoop.hive.ql.plan.MapredLocalWork;
-import org.apache.hadoop.hive.ql.plan.MapredWork;
-import org.apache.hadoop.hive.ql.plan.MoveWork;
-import org.apache.hadoop.hive.ql.plan.ReplCopyWork;
-import org.apache.hadoop.hive.ql.plan.ReplTxnWork;
-import org.apache.hadoop.hive.ql.plan.StatsWork;
-import org.apache.hadoop.hive.ql.plan.TezWork;
+import org.apache.hadoop.hive.ql.plan.*;
 import org.apache.hadoop.hive.ql.scheduled.ScheduledQueryMaintenanceWork;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -131,6 +117,8 @@ public final class TaskFactory {
     taskvec.add(new TaskTuple<DirCopyWork>(DirCopyWork.class, DirCopyTask.class));
     taskvec.add(new TaskTuple<ScheduledQueryMaintenanceWork>(ScheduledQueryMaintenanceWork.class,
             ScheduledQueryMaintenanceTask.class));
+    taskvec.add(new TaskTuple<>(PathOutputCommitterWork.class, PathOutputCommitterSetupTask.class));
+
   }
 
   private static ThreadLocal<Integer> tid = new ThreadLocal<Integer>() {

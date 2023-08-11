@@ -2855,13 +2855,40 @@ public final class Utilities {
       return visited.contains(task);
     }
   }
-
   private static <T> List<T> getTasks(List<Task<?>> tasks,
       TaskFilterFunction<T> function) {
     DAGTraversal.traverse(tasks, function);
     return function.getTasks();
   }
 
+
+  public static Map<Path, PartitionDetails> getFullDPSpecsForCommitter(Configuration conf,
+      DynamicPartitionCtx dpCtx, PathOutputCommitterDataCommitter pathOutputCommitterDataCommitter) throws HiveException {
+
+    // partial partition specification
+    Map<String, String> partSpec = dpCtx.getPartSpec();
+
+    // list of full partition specification
+    Map<Path, PartitionDetails> fullPartSpecList = new HashMap<>();
+
+    Set<String> parts = pathOutputCommitterDataCommitter.getPartNames();
+    if (parts != null) {
+      for (String partName : parts) {
+        Path partPath = new Path(pathOutputCommitterDataCommitter.getOutputPath(), partName);
+
+        LinkedHashMap<String, String> fullPartSpec = new LinkedHashMap<>(partSpec);
+        if (!Warehouse.makeSpecFromName(fullPartSpec, partPath, new HashSet<String>(partSpec.keySet()))) {
+          Utilities.FILE_OP_LOGGER.warn("Ignoring invalid DP directory {} for job committer", partName);
+          continue;
+        }
+        PartitionDetails details = new PartitionDetails();
+        details.fullSpec = fullPartSpec;
+        Utilities.FILE_OP_LOGGER.trace("Adding partition spec from {}: {} for job committer", partName, fullPartSpec);
+        fullPartSpecList.put(partPath, details);
+      }
+    }
+    return fullPartSpecList;
+  }
 
   public static final class PartitionDetails {
     public Map<String, String> fullSpec;
@@ -2876,7 +2903,10 @@ public final class Utilities {
    * corresponding to these dynamic partitions.
    */
   public static Map<Path, PartitionDetails> getFullDPSpecs(Configuration conf, DynamicPartitionCtx dpCtx,
-      Map<String, List<Path>> dynamicPartitionSpecs) throws HiveException {
+      Map<String, List<Path>> dynamicPartitionSpecs, DataCommitter dataCommitter) throws HiveException {
+    if (dataCommitter instanceof PathOutputCommitterDataCommitter) {
+      return getFullDPSpecsForCommitter(conf, dpCtx, (PathOutputCommitterDataCommitter)dataCommitter);
+    }
 
     try {
       Path loadPath = dpCtx.getRootPath();

@@ -70,6 +70,8 @@ public class MoveWork implements Serializable, BaseCopyWork {
   protected List<Partition> movedParts;
   private boolean isInReplicationScope = false;
 
+  private PathOutputCommitterWork pathOutputCommitterWork;
+
   public MoveWork() {
   }
 
@@ -236,5 +238,14 @@ public class MoveWork implements Serializable, BaseCopyWork {
       loadTableWork.setStmtId(deferredContext.stmtId);
       setLoadTableWork(loadTableWork);
     }
+  }
+
+  public PathOutputCommitterWork getPathOutputCommitterWork() {
+    return this.pathOutputCommitterWork;
+  }
+
+  public void setPathOutputCommitterWork(
+      PathOutputCommitterWork pathOutputCommitterWork) {
+    this.pathOutputCommitterWork = pathOutputCommitterWork;
   }
 }

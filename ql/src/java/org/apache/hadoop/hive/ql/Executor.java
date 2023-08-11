@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.hive.ql;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,13 +35,7 @@ import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.ql.cache.results.CacheUsage;
 import org.apache.hadoop.hive.ql.cache.results.QueryResultsCache;
 import org.apache.hadoop.hive.ql.cache.results.QueryResultsCache.CacheEntry;
-import org.apache.hadoop.hive.ql.exec.ConditionalTask;
-import org.apache.hadoop.hive.ql.exec.FetchTask;
-import org.apache.hadoop.hive.ql.exec.Task;
-import org.apache.hadoop.hive.ql.exec.TaskFactory;
-import org.apache.hadoop.hive.ql.exec.TaskResult;
-import org.apache.hadoop.hive.ql.exec.TaskRunner;
-import org.apache.hadoop.hive.ql.exec.Utilities;
+import org.apache.hadoop.hive.ql.exec.*;
 import org.apache.hadoop.hive.ql.history.HiveHistory.Keys;
 import org.apache.hadoop.hive.ql.hooks.HookContext;
 import org.apache.hadoop.hive.ql.hooks.PrivateHookContext;
@@ -52,7 +47,10 @@ import org.apache.hadoop.hive.ql.plan.HiveOperation;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorException;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.hive.ql.session.SessionState.LogHelper;
+import org.apache.hadoop.mapreduce.JobContext;
+import org.apache.hadoop.mapreduce.JobID;
 import org.apache.hadoop.mapreduce.MRJobConfig;
+import org.apache.hadoop.mapreduce.task.JobContextImpl;
 import org.apache.hadoop.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,6 +101,7 @@ public class Executor {
       // Disable HMS cache so any metadata calls during execution get fresh responses.
       driverContext.getQueryState().disableHMSCache();
       runTasks(noName);
+      cleanUpJobCommitter();
       driverContext.getQueryState().enableHMSCache();
       postExecutionCacheActions();
       postExecutionActions();
@@ -478,6 +477,17 @@ public class Executor {
         String.valueOf(0));
     SessionState.get().getHiveHistory().printRowCount(driverContext.getQueryId());
     releasePlan(driverContext.getPlan());
+  }
+
+  private void cleanUpJobCommitter() {
+    JobContext jobContext = new JobContextImpl(driverContext.getConf(), new JobID(driverContext.getConf().getVar(HiveConf.ConfVars.HIVEQUERYID), 0));
+    try {
+      CommitterManifest committerManifest = new CommitterManifest(jobContext);
+      committerManifest.cleanupManifestDir();
+    } catch (Exception e) {
+      LOG.warn("Delete job: {} manifest file error", jobContext.getJobID(), e);
+    }
+
   }
 
   private void releasePlan(QueryPlan plan) {

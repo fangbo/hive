@@ -5687,6 +5687,9 @@ public class HiveConf extends Configuration {
             "This is a performance optimization that forces the final FileSinkOperator to write to the blobstore.\n" +
             "See HIVE-15121 for details."),
 
+    HIVE_BLOBSTORE_USE_OUTPUTCOMMITTER("hive.blobstore.use.output-committer", false, "Whether to " +
+        "use a custom PathOutputCommitter to commit data."),
+
     HIVE_USE_SCRATCHDIR_FOR_STAGING("hive.use.scratchdir.for.staging", false,
         "Use ${hive.exec.scratchdir} for query results instead of ${hive.exec.stagingdir}.\n" +
             "This stages query results in ${hive.exec.scratchdir} before moving to final destination."),

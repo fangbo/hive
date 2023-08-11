@@ -29,6 +29,7 @@ import java.util.Map;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.common.FileUtils;
 import org.apache.hadoop.hive.common.HiveStatsUtils;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.Warehouse;
@@ -380,7 +381,7 @@ public class ConditionalResolverMergeFiles implements ConditionalResolver,
   private AverageSize getAverageSize(FileSystem inpFs, Path dirPath) {
     AverageSize error = new AverageSize(-1, -1);
     try {
-      FileStatus[] fStats = inpFs.listStatus(dirPath);
+      FileStatus[] fStats = inpFs.listStatus(dirPath, FileUtils.HIDDEN_FILES_PATH_FILTER);
 
       long totalSz = 0;
       int numFiles = 0;

@@ -18,19 +18,17 @@
 
 package org.apache.hadoop.hive.ql.plan;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.api.CompactionType;
 import org.apache.hadoop.hive.ql.Context;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.optimizer.physical.PathOutputCommitterResolver;
 import org.apache.hadoop.hive.ql.optimizer.signature.Signature;
 import org.apache.hadoop.hive.ql.plan.Explain.Level;
 import org.apache.hadoop.hive.ql.plan.Explain.Vectorization;
@@ -134,6 +132,18 @@ public class FileSinkDesc extends AbstractOperatorDesc implements IStatsGatherDe
   private boolean isQuery = false;
 
   private boolean isCTASorCM = false;
+
+  private final String writerId = UUID.randomUUID().toString();
+
+  private boolean hasOutputCommitter;
+
+  // If this file sink has output committer, outputPath is the final output directory
+  // which the file will be written to.
+  private String outputPath;
+
+  // If this FileSink has job committer and there is no MoveTask to do commitJob.
+  // We should commitJob when FileSinkOperator.jobCloseOp is called.
+  private boolean commitJobWhenJobCloseOp = false;
 
   public FileSinkDesc() {
   }
@@ -716,6 +726,40 @@ public class FileSinkDesc extends AbstractOperatorDesc implements IStatsGatherDe
 
   public boolean getInsertOverwrite() {
     return isInsertOverwrite;
+  }
+
+  public String writerId() {
+    return String.format("%s_%s_%s", dirName.getParent().getName(), dirName.getName(), writerId);
+  }
+
+  public boolean isHasOutputCommitter() {
+    return hasOutputCommitter;
+  }
+
+  public void setHasOutputCommitter(boolean hasOutputCommitter) {
+    this.hasOutputCommitter = hasOutputCommitter;
+  }
+
+  public String getOutputPath() {
+    return outputPath;
+  }
+
+  public void setOutputPath(String outputPath) {
+    this.outputPath = outputPath;
+  }
+
+  public PathOutputCommitterWork getOutputCommitterWork(Configuration hconf) {
+    PathOutputCommitterWork work = PathOutputCommitterResolver.createPathOutputCommitterWork(hconf, new Path(outputPath));
+    work.addWriterId(writerId());
+    return work;
+  }
+
+  public boolean isCommitJobWhenJobCloseOp() {
+    return commitJobWhenJobCloseOp;
+  }
+
+  public void setCommitJobWhenJobCloseOp(boolean commitJobWhenJobCloseOp) {
+    this.commitJobWhenJobCloseOp = commitJobWhenJobCloseOp;
   }
 
   @Override

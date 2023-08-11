@@ -98,24 +98,13 @@ import org.apache.hadoop.hive.ql.optimizer.SetHashGroupByMinReduction;
 import org.apache.hadoop.hive.ql.optimizer.SetReducerParallelism;
 import org.apache.hadoop.hive.ql.optimizer.SharedWorkOptimizer;
 import org.apache.hadoop.hive.ql.optimizer.SortedDynPartitionOptimizer;
+import org.apache.hadoop.hive.ql.optimizer.physical.*;
 import org.apache.hadoop.hive.ql.optimizer.topnkey.TopNKeyProcessor;
 import org.apache.hadoop.hive.ql.optimizer.calcite.reloperators.HiveFilter;
 import org.apache.hadoop.hive.ql.optimizer.correlation.ReduceSinkDeDuplication;
 import org.apache.hadoop.hive.ql.optimizer.topnkey.TopNKeyPushdownProcessor;
 import org.apache.hadoop.hive.ql.optimizer.correlation.ReduceSinkJoinDeDuplication;
 import org.apache.hadoop.hive.ql.optimizer.metainfo.annotation.AnnotateWithOpTraits;
-import org.apache.hadoop.hive.ql.optimizer.physical.AnnotateRunTimeStatsOptimizer;
-import org.apache.hadoop.hive.ql.optimizer.physical.CrossProductHandler;
-import org.apache.hadoop.hive.ql.optimizer.physical.LlapClusterStateForCompile;
-import org.apache.hadoop.hive.ql.optimizer.physical.LlapDecider;
-import org.apache.hadoop.hive.ql.optimizer.physical.LlapPreVectorizationPass;
-import org.apache.hadoop.hive.ql.optimizer.physical.MemoryDecider;
-import org.apache.hadoop.hive.ql.optimizer.physical.MetadataOnlyOptimizer;
-import org.apache.hadoop.hive.ql.optimizer.physical.NullScanOptimizer;
-import org.apache.hadoop.hive.ql.optimizer.physical.PhysicalContext;
-import org.apache.hadoop.hive.ql.optimizer.physical.SerializeFilter;
-import org.apache.hadoop.hive.ql.optimizer.physical.StageIDsRearranger;
-import org.apache.hadoop.hive.ql.optimizer.physical.Vectorizer;
 import org.apache.hadoop.hive.ql.optimizer.signature.OpTreeSignature;
 import org.apache.hadoop.hive.ql.optimizer.stats.annotation.AnnotateWithStatistics;
 import org.apache.hadoop.hive.ql.plan.AggregationDesc;
@@ -829,6 +818,10 @@ public class TezCompiler extends TaskCompiler {
 
     if (physicalCtx.getContext().getExplainAnalyze() != null) {
       new AnnotateRunTimeStatsOptimizer().resolve(physicalCtx);
+    }
+
+    if (conf.getBoolVar(HiveConf.ConfVars.HIVE_BLOBSTORE_USE_OUTPUTCOMMITTER)) {
+      new PathOutputCommitterResolver().resolve(physicalCtx);
     }
 
     perfLogger.perfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "optimizeTaskPlan");

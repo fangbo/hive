@@ -106,9 +106,9 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
     super();
   }
 
-  private boolean moveFilesUsingManifestFile(FileSystem fs, Path sourcePath, Path targetPath)
+  private static boolean moveFilesUsingManifestFile(boolean isCTAS, FileSystem fs, Path sourcePath, Path targetPath, HiveConf conf)
           throws HiveException, IOException {
-    if (work.isCTAS() && BlobStorageUtils.isBlobStorageFileSystem(conf, fs)) {
+    if (isCTAS && BlobStorageUtils.isBlobStorageFileSystem(conf, fs)) {
       if (fs.exists(new Path(sourcePath, BLOB_MANIFEST_FILE))) {
         LOG.debug("Attempting to copy using the paths available in {}", new Path(sourcePath, BLOB_MANIFEST_FILE));
         ArrayList<String> filesKept;
@@ -129,7 +129,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
     return false;
   }
 
-  private void moveFile(Path sourcePath, Path targetPath, boolean isDfsDir)
+  static void moveFile(Path sourcePath, Path targetPath, boolean isDfsDir, boolean needCleanTarget, boolean isCTAS, HiveConf conf, SessionState.LogHelper console)
       throws HiveException {
     try {
       PerfLogger perfLogger = SessionState.getPerfLogger();
@@ -143,17 +143,17 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
       FileSystem fs = sourcePath.getFileSystem(conf);
 
       // if _blob_files_kept is present, use it to move the files. Else fall back to normal case.
-      if (moveFilesUsingManifestFile(fs, sourcePath, targetPath)) {
+      if (moveFilesUsingManifestFile(isCTAS, fs, sourcePath, targetPath, conf)) {
         perfLogger.perfLogEnd("MoveTask", PerfLogger.FILE_MOVES);
         return;
       }
 
       if (isDfsDir) {
-        moveFileInDfs (sourcePath, targetPath, conf);
+        moveFileInDfs (needCleanTarget, sourcePath, targetPath, conf);
       } else {
         // This is a local file
         FileSystem dstFs = FileSystem.getLocal(conf);
-        moveFileFromDfsToLocal(sourcePath, targetPath, fs, dstFs);
+        moveFileFromDfsToLocal(sourcePath, targetPath, fs, dstFs, conf);
       }
 
       perfLogger.perfLogEnd("MoveTask", PerfLogger.FILE_MOVES);
@@ -163,7 +163,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
     }
   }
 
-  private void moveFileInDfs (Path sourcePath, Path targetPath, HiveConf conf)
+  private static void moveFileInDfs (boolean needCleanTarget, Path sourcePath, Path targetPath, HiveConf conf)
       throws HiveException, IOException {
 
     final FileSystem srcFs, tgtFs;
@@ -190,7 +190,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
       }
       //For acid table incremental replication, just copy the content of staging directory to destination.
       //No need to clean it.
-      if (work.isNeedCleanTarget()) {
+      if (needCleanTarget) {
         Hive.clearDestForSubDirSrc(conf, targetPath, sourcePath, false);
       }
       // Set isManaged to false as this is not load data operation for which it is needed.
@@ -211,8 +211,8 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
     }
   }
 
-  private void moveFileFromDfsToLocal(Path sourcePath, Path targetPath, FileSystem fs,
-      FileSystem dstFs) throws HiveException, IOException {
+  private static void moveFileFromDfsToLocal(Path sourcePath, Path targetPath, FileSystem fs,
+      FileSystem dstFs, HiveConf conf) throws HiveException, IOException {
       // RawLocalFileSystem seems not able to get the right permissions for a local file, it
       // always returns hdfs default permission (00666). So we can not overwrite a directory
       // by deleting and recreating the directory and restoring its permissions. We should
@@ -242,7 +242,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
     }
   }
 
-  private Path createTargetPath(Path targetPath, FileSystem fs) throws IOException {
+  private static Path createTargetPath(Path targetPath, FileSystem fs) throws IOException {
     Path deletePath = null;
     Path mkDirPath = targetPath.getParent();
     if (mkDirPath != null && !fs.exists(mkDirPath)) {
@@ -372,6 +372,8 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
 
       Hive db = getHive();
 
+      DataCommitter dataCommitter = getDataCommitter();
+
       // Do any hive related operations like moving tables and files
       // to appropriate locations
       LoadFileDesc lfd = work.getLoadFileWork();
@@ -399,7 +401,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
             if (!targetFs.exists(targetPath.getParent())){
               targetFs.mkdirs(targetPath.getParent());
             }
-            moveFile(sourcePath, targetPath, lfd.getIsDfsDir());
+            dataCommitter.moveFile(sourcePath, targetPath, lfd.getIsDfsDir(), work.isNeedCleanTarget(), work.isCTAS(), conf, console);
           }
         }
       }
@@ -424,7 +426,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
               destFs.mkdirs(destPath.getParent());
             }
             Utilities.FILE_OP_LOGGER.debug("MoveTask moving (multi-file) " + srcPath + " to " + destPath);
-            moveFile(srcPath, destPath, isDfsDir);
+            dataCommitter.moveFile(srcPath, destPath, isDfsDir, work.isNeedCleanTarget(), work.isCTAS(), conf, console);
           } else {
             if (!destFs.exists(destPath)) {
               destFs.mkdirs(destPath);
@@ -436,7 +438,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
                 Path childSrc = child.getPath();
                 Path childDest = new Path(destPath, filePrefix + childSrc.getName());
                 Utilities.FILE_OP_LOGGER.debug("MoveTask moving (multi-file) " + childSrc + " to " + childDest);
-                moveFile(childSrc, childDest, isDfsDir);
+                moveFile(childSrc, childDest, isDfsDir, work.isNeedCleanTarget(), work.isCTAS(), conf, console);
               }
             } else {
               Utilities.FILE_OP_LOGGER.debug("MoveTask skipping empty directory (multi-file) " + srcPath);
@@ -494,11 +496,11 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
           if (dpCtx != null && dpCtx.getNumDPCols() > 0) { // dynamic partitions
             // if _blob_files_kept is present, use it to move the files to the target path
             // before loading the partitions.
-            moveFilesUsingManifestFile(tbd.getSourcePath().getFileSystem(conf),
-                    tbd.getSourcePath(), dpCtx.getRootPath());
-            dc = handleDynParts(db, table, tbd, ti, dpCtx);
+            moveFilesUsingManifestFile(work.isCTAS(), tbd.getSourcePath().getFileSystem(conf),
+                    tbd.getSourcePath(), dpCtx.getRootPath(), conf);
+            dc = handleDynParts(db, table, tbd, ti, dpCtx, dataCommitter);
           } else { // static partitions
-            dc = handleStaticParts(db, table, tbd, ti);
+            dc = handleStaticParts(db, table, tbd, ti, dataCommitter);
           }
         }
         if (dc != null) {
@@ -534,6 +536,18 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
       LOG.error("MoveTask failed", e);
       return ReplUtils.handleException(work.isReplication(), e, work.getDumpDirectory(), work.getMetricCollector(),
                                        getName(), conf);
+    }
+  }
+
+  private DataCommitter getDataCommitter() throws IOException {
+    if (work.getPathOutputCommitterWork() != null) {
+      PathOutputCommitterDataCommitter dataCommitter = new PathOutputCommitterDataCommitter(
+          work.getPathOutputCommitterWork().getJobContext(),
+          work.getPathOutputCommitterWork().createPathOutputCommitter(),
+          work.getPathOutputCommitterWork().writeIds());
+      return dataCommitter;
+    } else {
+      return HiveDataCommitter.FALLBACK_DATA_COMMITTER;
     }
   }
 
@@ -582,7 +596,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
   }
 
   private DataContainer handleStaticParts(Hive db, Table table, LoadTableDesc tbd,
-      TaskInformation ti) throws HiveException, IOException, InvalidOperationException {
+      TaskInformation ti, DataCommitter dataCommitter) throws HiveException, IOException, InvalidOperationException {
     List<String> partVals = MetaStoreUtils.getPvals(table.getPartCols(),  tbd.getPartitionSpec());
     db.validatePartitionNameCharacters(partVals);
     if (Utilities.FILE_OP_LOGGER.isTraceEnabled()) {
@@ -596,7 +610,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
             work.getLoadTableWork().getWriteType() != AcidUtils.Operation.NOT_ACID &&
                     !tbd.isMmTable(),
             resetStatisticsProps(table), tbd.getWriteId(), tbd.getStmtId(),
-            tbd.isInsertOverwrite(), tbd.isDirectInsert());
+            tbd.isInsertOverwrite(), tbd.isDirectInsert(), dataCommitter);
     Partition partn = db.getPartition(table, tbd.getPartitionSpec(), false);
 
     // See the comment inside updatePartitionBucketSortColumns.
@@ -615,7 +629,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
   }
 
   private DataContainer handleDynParts(Hive db, Table table, LoadTableDesc tbd,
-      TaskInformation ti, DynamicPartitionCtx dpCtx) throws HiveException,
+      TaskInformation ti, DynamicPartitionCtx dpCtx, DataCommitter dataCommitter) throws HiveException,
       IOException, InvalidOperationException {
     DataContainer dc;
     // In case of direct insert, we need to get the statementId in order to make a merge statement work properly.
@@ -636,7 +650,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
       dynamicPartitionSpecs = queryPlan.getDynamicPartitionSpecs(work.getLoadTableWork().getWriteId(), tbd.getMoveTaskId(),
           work.getLoadTableWork().getWriteType(), tbd.getSourcePath());
     }
-    Map<Path, Utilities.PartitionDetails> dps = Utilities.getFullDPSpecs(conf, dpCtx, dynamicPartitionSpecs);
+    Map<Path, Utilities.PartitionDetails> dps = Utilities.getFullDPSpecs(conf, dpCtx, dynamicPartitionSpecs, dataCommitter);
 
     console.printInfo(System.getProperty("line.separator"));
     long startTime = System.currentTimeMillis();
@@ -656,8 +670,8 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
         statementId,
         resetStatisticsProps(table),
         work.getLoadTableWork().getWriteType(),
-        dps
-        );
+        dps,
+        dataCommitter);
 
     // publish DP columns to its subscribers
     if (dp != null && dp.size() > 0) {

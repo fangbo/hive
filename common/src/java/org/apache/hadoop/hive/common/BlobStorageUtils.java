@@ -21,6 +21,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.mapreduce.lib.output.PathOutputCommitterFactory;
 
 import java.util.Collection;
 
@@ -60,5 +61,19 @@ public class BlobStorageUtils {
                 HiveConf.ConfVars.HIVE_BLOBSTORE_OPTIMIZATIONS_ENABLED.varname,
                 HiveConf.ConfVars.HIVE_BLOBSTORE_OPTIMIZATIONS_ENABLED.defaultBoolVal
         );
+    }
+
+
+    public static boolean isBlobStorageCommitterEnabled(Configuration conf, Path path) {
+        if (!conf.getBoolean(
+            HiveConf.ConfVars.HIVE_BLOBSTORE_USE_OUTPUTCOMMITTER.varname,
+            HiveConf.ConfVars.HIVE_BLOBSTORE_USE_OUTPUTCOMMITTER.defaultBoolVal)) {
+            return false;
+        }
+
+        String key = String.format(
+            PathOutputCommitterFactory.COMMITTER_FACTORY_SCHEME_PATTERN,
+            path.toUri().getScheme());
+        return BlobStorageUtils.isBlobStoragePath(conf, path) && conf.get(key) != null;
     }
 }
